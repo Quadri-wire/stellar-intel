@@ -17,10 +17,11 @@ export interface WalletAsset {
   issuer?: string | null;
 }
 
+/** Balance of asset, null when the account has no trustline. */
 async function fetchAssetBalance(publicKey: string, asset: WalletAsset): Promise<number | null> {
   const account = await fetchAccount(publicKey);
-  if (asset.code === 'XLM' && !asset.issuer) {
-    const line = account.balances.find((b) => !('asset_code' in b));
+  if (asset.issuer === null || (asset.issuer === undefined && asset.code === 'XLM')) {
+    const line = account.balances.find((b) => b.asset_type === 'native' || !('asset_code' in b));
     return line ? Number.parseFloat(line.balance) : null;
   }
   const line = account.balances.find(
@@ -35,7 +36,7 @@ export function useWalletBalance(
   asset: WalletAsset = USDC_ASSET
 ): UseWalletBalanceResult {
   const { data, error, isLoading, mutate } = useSWR<number | null, Error>(
-    publicKey ? ['wallet-balance', publicKey, asset.code, asset.issuer ?? ''] : null,
+    publicKey ? ['asset-balance', publicKey, asset.code, asset.issuer ?? 'native'] : null,
     ([, pk]: [string, string]) => fetchAssetBalance(pk, asset),
     { revalidateOnFocus: false }
   );
