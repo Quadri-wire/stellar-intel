@@ -138,3 +138,38 @@ describe('fetchCorridorRates — unverifiedPayout flag (ANC037)', () => {
     expect(result.rates[0]?.unverifiedPayout).toBe(true);
   });
 });
+
+describe('fetchCorridorRates — corridor asset passed to SEP-38 (#1282)', () => {
+  it('calls getSep38Price with sell_asset from the corridor asset, not the anchor entry', async () => {
+    const arstCorridor: Corridor = {
+      id: 'arst-ars',
+      from: 'ARST',
+      fromIssuer: 'GCSAZVWXZKWS4XS223M5F54H2B6XPIIXZZGP7KEAIU6YSL5HDRGCI3DG',
+      fromPeg: 'ARS',
+      to: 'ARS',
+      countryCode: 'AR',
+      countryName: 'Argentina',
+    };
+    const anchorWithDivergentAsset: Anchor = {
+      id: 'latamex',
+      name: 'Latamex',
+      homeDomain: 'pubnet-sep.latamex.com',
+      corridors: ['arst-ars'],
+      assetCode: 'USDC', // divergent from corridor's ARST
+      assetIssuer: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+      seps: ['sep10', 'sep38'],
+    };
+
+    vi.mocked(getCorridorById).mockReturnValue(arstCorridor);
+    vi.mocked(getAnchorsByCorridorId).mockReturnValue([anchorWithDivergentAsset]);
+
+    await fetchCorridorRates('arst-ars', '100');
+
+    expect(getSep38Price).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sell_asset: 'stellar:ARST:GCSAZVWXZKWS4XS223M5F54H2B6XPIIXZZGP7KEAIU6YSL5HDRGCI3DG',
+        buy_asset: 'iso4217:ARS',
+      })
+    );
+  });
+});

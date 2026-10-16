@@ -182,3 +182,40 @@ describe('fetchCorridorRates — Latamex usdc-ars via withdraw-exchange (#1298)'
     expect(result.rates[0]?.totalReceived).toBeCloseTo(99000);
   });
 });
+
+describe('fetchCorridorRates — non-USDC corridor SEP-6 asset (#1282)', () => {
+  it('requests the corridor asset code from SEP-6 /info instead of USDC', async () => {
+    const latamex: Anchor = {
+      id: 'latamex',
+      name: 'Latamex',
+      homeDomain: 'pubnet-sep.latamex.com',
+      corridors: ['arst-ars', 'brlt-brl', 'usdc-ars', 'usdc-brl'],
+      assetCode: 'USDC',
+      assetIssuer: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+    };
+    vi.mocked(getAnchorsByCorridorId).mockReturnValue([latamex]);
+    vi.mocked(resolveAnchor).mockResolvedValue({
+      ...sep6Toml,
+      TRANSFER_SERVER: 'https://transfer-server.zetl.network',
+    } as unknown as Sep1TomlData);
+    vi.mocked(getUsdFxRate).mockResolvedValue(1000);
+    vi.mocked(getFxRate).mockResolvedValue(1000);
+    vi.mocked(getSep6Info).mockResolvedValue({
+      enabled: true,
+      feeFixed: 1,
+      feePercent: 0,
+      min: 10,
+      max: 10000,
+      fields: {},
+    });
+
+    const result = await fetchCorridorRates('arst-ars', '100');
+
+    expect(result.errors).toHaveLength(0);
+    expect(result.rates).toHaveLength(1);
+    expect(vi.mocked(getSep6Info)).toHaveBeenCalledWith(
+      'https://transfer-server.zetl.network',
+      'ARST'
+    );
+  });
+});

@@ -1,6 +1,12 @@
 import type { Anchor, AnchorRate, Corridor, RateComparison, Sep1TomlData } from '@/types';
 import { isAnchorAssetEnabled } from '@/constants/anchors';
-import { getAnchorsByCorridorId, getCorridorById } from './anchors';
+import {
+  getAnchorsByCorridorId,
+  getCorridorAsset,
+  getCorridorById,
+  sep38AssetId,
+  type CorridorAsset,
+} from './anchors';
 import { resolveAnchor } from './sep1';
 import { assertSep38Capable, getSep38Price } from './sep38';
 import { getSep24Info } from './sep24';
@@ -199,6 +205,7 @@ async function fetchPriceAcrossContexts(
 async function indicativeRate(
   anchor: Anchor,
   toml: Sep1TomlData,
+  asset: CorridorAsset,
   pegCode: string,
   fiatCode: string,
   corridorId: string,
@@ -220,9 +227,12 @@ async function indicativeRate(
     getFxRate(pegCode, fiatCode),
   ]);
 
-  const assetInfo = info.withdraw[anchor.assetCode];
+  let assetInfo = info.withdraw[asset.code];
+  if (!assetInfo && asset.issuer === null) {
+    assetInfo = info.withdraw['native'];
+  }
   if (!assetInfo || assetInfo.enabled === false) {
-    throw new Error(`anchor does not enable ${anchor.assetCode} withdrawals`);
+    throw new Error(`anchor does not enable ${asset.code} withdrawals`);
   }
 
   const feeFixed = assetInfo.fee_fixed ?? 0;
@@ -265,6 +275,7 @@ function hasSep6(toml: Sep1TomlData): boolean {
 async function sep6IndicativeRate(
   anchor: Anchor,
   toml: Sep1TomlData,
+  asset: CorridorAsset,
   pegCode: string,
   fiatCode: string,
   corridorId: string,
@@ -279,9 +290,9 @@ async function sep6IndicativeRate(
   // stays `source: 'sep6-fee'` — still indicative, not a firm quote.
   const [config, fxRate] = await Promise.all([
     withTimeout(
-      getSep6Info(transferServer, anchor.assetCode).catch((err) => {
+      getSep6Info(transferServer, asset.code).catch((err) => {
         if (err instanceof Sep6AssetDisabledError) {
-          return getSep6Info(transferServer, anchor.assetCode, { exchange: true });
+          return getSep6Info(transferServer, asset.code, { exchange: true });
         }
         throw err;
       }),
@@ -333,12 +344,24 @@ export async function fetchCorridorRates(
 ): Promise<ServerRatesResult> {
   const corridor = getCorridorById(corridorId); // throws on unknown corridor
   const anchors = getAnchorsByCorridorId(corridorId);
+  const asset = getCorridorAsset(corridorId);
 
   const buyAsset = `iso4217:${corridor.to}`;
   const sellAmount = Number(amount);
+  const sellAsset = sep38AssetId(asset);
 
   const rates: AnchorRate[] = [];
   const errors: AnchorRateError[] = [];
+
+  const ctx: CorridorQuoteContext = {
+    corridorId,
+    corridor,
+    asset,
+    sellAsset,
+    buyAsset,
+    amount,
+    sellAmount,
+  };
 
   await Promise.all(
     anchors.map(async (anchor) => {
@@ -351,17 +374,11 @@ export async function fetchCorridorRates(
       const anchorName = safeAnchorField(() => anchor.name, anchorId);
 
       try {
-        if (!isAnchorAssetEnabled(anchor.assetCode)) {
-          throw new Error(`${anchor.assetCode} rates are disabled by feature flag`);
+        if (!isAnchorAssetEnabled(asset.code)) {
+          throw new Error(`${asset.code} rates are disabled by feature flag`);
         }
 
-        const sellAsset = `stellar:${anchor.assetCode}:${anchor.assetIssuer}`;
-        await quoteAnchorOnCorridor(
-          anchor,
-          { corridorId, corridor, sellAsset, buyAsset, amount, sellAmount },
-          rates,
-          errors
-        );
+        await quoteAnchorOnCorridor(anchor, ctx, rates, errors);
       } catch (err) {
         errors.push({
           anchorId,
@@ -410,6 +427,7 @@ export async function fetchCorridorRates(
 interface CorridorQuoteContext {
   corridorId: string;
   corridor: Corridor;
+  asset: CorridorAsset;
   sellAsset: string;
   buyAsset: string;
   amount: string;
@@ -428,7 +446,7 @@ async function quoteAnchorOnCorridor(
   rates: AnchorRate[],
   errors: AnchorRateError[]
 ): Promise<void> {
-  const { corridorId, corridor, sellAsset, buyAsset, amount, sellAmount } = ctx;
+  const { corridorId, corridor, asset, sellAsset, buyAsset, amount, sellAmount } = ctx;
 
   let toml: Sep1TomlData;
   try {
@@ -500,6 +518,7 @@ async function quoteAnchorOnCorridor(
     const rate = await indicativeRate(
       anchor,
       toml,
+      asset,
       corridor.fromPeg,
       corridor.to,
       corridorId,
@@ -523,6 +542,7 @@ async function quoteAnchorOnCorridor(
       const rate = await sep6IndicativeRate(
         anchor,
         toml,
+        asset,
         corridor.fromPeg,
         corridor.to,
         corridorId,
